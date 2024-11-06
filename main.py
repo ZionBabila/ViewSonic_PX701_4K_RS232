@@ -1,100 +1,95 @@
 import serial
+import serial.tools.list_ports
 import time
 import argparse
 
-# Set up the serial connection (adjust the port as needed)
-ser = serial.Serial(
-    port='COM4',  # Replace with your serial port (e.g., 'COM3', '/dev/ttyUSB0')
-    baudrate=115200,
-    parity=serial.PARITY_NONE,
-    stopbits=serial.STOPBITS_ONE,
-    bytesize=serial.EIGHTBITS,
-    timeout=2  # Timeout for reading responses
-)
+def list_serial_ports():
+    print("Listing available serial ports...")
+    ports = serial.tools.list_ports.comports()
+    for port in ports:
+        print(f"{port.device}: {port.description}")
 
-def send_command(command):
-    """Send a command to the display and print the response."""
+def open_serial_connection(port, baud_rate):
+    print(f"Attempting to open serial connection on port {port} at {baud_rate} baud...")
     try:
-        # Reset serial buffers before sending command
-        ser.reset_input_buffer()
-        ser.reset_output_buffer()
-        
-        # Send command followed by carriage return and newline
-        print(f"Sending command: {command.hex()}")
-        ser.write(command + b'\r\n')
-        time.sleep(1)  # Short delay to allow device to respond
-
-        # Read response in a loop until data is available or timeout occurs
-        start_time = time.time()
-        response = b""
-        while time.time() - start_time < 2:
-            if ser.in_waiting > 0:
-                response += ser.read(ser.in_waiting)
-            time.sleep(0.1)
-        
-        if response:
-            response_hex = response.hex()
-            print("Response:", response_hex)
-            return response_hex
-        else:
-            print("No response received.")
-            return None
-    except Exception as e:
-        print("Error:", e)
+        ser = serial.Serial(port, baud_rate, timeout=1)
+        if ser.isOpen():
+            print(f"Successfully connected to {port} at {baud_rate} baud.")
+            return ser
+    except serial.SerialException as e:
+        print(f"Error opening serial port: {e}")
         return None
 
-def power_on():
-    """Turn on the display."""
-    print("Sending power ON command...")
-    command = bytearray([0x35, 0x21, 0x30, 0x30, 0x31])  # Corresponds to '5!001'
-    response = send_command(command)
-    if response and ("2b" in response or "3e" in response):  # Accept '+' or '>'
-        print("Power ON command acknowledged.")
-    elif response and "2d" in response:  # Check for '-' (failure)
-        print("Power ON command failed.")
-    else:
-        print("Unexpected response:", response)
+def send_command(ser, command):
+    print(f"Sending command: {command.hex()}")
+    try:
+        ser.write(command)
+        print("Command sent, waiting for response...")
+        time.sleep(0.5)  # Wait for response
+        response = ser.read_all()
+        print(f"Received response: {response.hex() if response else 'No response'}")
+        return response
+    except serial.SerialTimeoutException:
+        print("Error: Timeout when writing to serial port.")
+    except Exception as e:
+        print(f"Error sending command: {e}")
 
-def power_off():
-    """Turn off the display (Standby mode)."""
-    print("Sending power OFF command...")
-    command = bytearray([0x35, 0x21, 0x30, 0x30, 0x30])  # Corresponds to '5!000'
-    response = send_command(command)
-    if response and ("2b" in response or "3e" in response):  # Accept '+' or '>'
-        print("Power OFF command acknowledged.")
-    elif response and "2d" in response:  # Check for '-' (failure)
-        print("Power OFF command failed.")
-    else:
-        print("Unexpected response:", response)
+def close_serial_connection(ser):
+    if ser:
+        print("Closing serial connection...")
+        ser.close()
+        print("Serial connection closed.")
 
 def main():
-    """Main function to handle command line arguments."""
-    parser = argparse.ArgumentParser(description='Control display power via serial commands.')
-    parser.add_argument('action', choices=['on', 'off'], help='Power action: on or off')
-    parser.add_argument('--port', default='COM4', help='Serial port (default: COM4)')
-    parser.add_argument('--baudrate', type=int, default=115200, help='Baudrate (default: 115200)')
-    parser.add_argument('--timeout', type=float, default=2, help='Serial timeout in seconds (default: 2)')
+    print("Parsing command line arguments...")
+    parser = argparse.ArgumentParser(description="ViewSonic PX701-4K Projector RS232 Command Line Control.")
+    parser.add_argument("-l", "--list", action="store_true", help="List available serial ports")
+    parser.add_argument("-p", "--port", help="Serial port (e.g., COM3, /dev/ttyUSB0)")
+    parser.add_argument("-b", "--baud", type=int, default=9600, help="Baud rate (default: 9600)")
+    subparsers = parser.add_subparsers(dest="action", help="Sub-command help")
+
+    # Write command parser
+    write_parser = subparsers.add_parser("write", help="Write command to the projector")
+    write_parser.add_argument("command_bytes", nargs="+", help="Command bytes in hexadecimal format (e.g., 0xAA 0x00 0x01 0x34)")
 
     args = parser.parse_args()
 
-    # Update serial port configuration based on command line arguments
-    global ser
-    ser = serial.Serial(
-        port=args.port,
-        baudrate=args.baudrate,
-        parity=serial.PARITY_NONE,
-        stopbits=serial.STOPBITS_ONE,
-        bytesize=serial.EIGHTBITS,
-        timeout=args.timeout
-    )
+    if args.list:
+        list_serial_ports()
+        return
 
-    try:
-        if args.action == 'on':
-            power_on()
+    if not args.port or not args.action:
+        print("Error: Port and action must be specified unless listing ports.")
+        return
+
+    print(f"Port: {args.port}, Baud Rate: {args.baud}, Action: {args.action}")
+
+    if args.action == "write":
+        try:
+            # Convert command bytes from string to actual bytes
+            command_packet = bytes(int(byte, 16) for byte in args.command_bytes)
+            print(f"Generated command packet: {command_packet.hex()}")
+        except ValueError as e:
+            print(f"Error converting command bytes: {e}")
+            return
+
+        # Open the serial connection
+        ser = open_serial_connection(args.port, args.baud)
+        if not ser:
+            print("Failed to open serial connection.")
+            return
+
+        # Send the command
+        response = send_command(ser, command_packet)
+        if response:
+            print("Response:", response.hex())
         else:
-            power_off()
-    finally:
-        ser.close()
+            print("No response received from the projector.")
+
+        # Close the connection
+        close_serial_connection(ser)
 
 if __name__ == "__main__":
+    print("Starting ViewSonic PX701-4K Projector RS232 Command Line Control...")
     main()
+    print("Program finished.")
