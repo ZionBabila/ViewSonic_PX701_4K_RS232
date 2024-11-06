@@ -1,5 +1,6 @@
 import serial
 import time
+import argparse
 
 # Set up the serial connection (adjust the port as needed)
 ser = serial.Serial(
@@ -66,8 +67,34 @@ def power_off():
     else:
         print("Unexpected response:", response)
 
+def main():
+    """Main function to handle command line arguments."""
+    parser = argparse.ArgumentParser(description='Control display power via serial commands.')
+    parser.add_argument('action', choices=['on', 'off'], help='Power action: on or off')
+    parser.add_argument('--port', default='COM4', help='Serial port (default: COM4)')
+    parser.add_argument('--baudrate', type=int, default=115200, help='Baudrate (default: 115200)')
+    parser.add_argument('--timeout', type=float, default=2, help='Serial timeout in seconds (default: 2)')
+
+    args = parser.parse_args()
+
+    # Update serial port configuration based on command line arguments
+    global ser
+    ser = serial.Serial(
+        port=args.port,
+        baudrate=args.baudrate,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        bytesize=serial.EIGHTBITS,
+        timeout=args.timeout
+    )
+
+    try:
+        if args.action == 'on':
+            power_on()
+        else:
+            power_off()
+    finally:
+        ser.close()
+
 if __name__ == "__main__":
-    power_on()
-    time.sleep(5)  # Wait a few seconds before turning off
-    power_off()
-    ser.close()  # Close the serial connection when done
+    main()
